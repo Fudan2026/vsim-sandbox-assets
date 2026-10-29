@@ -248,18 +248,31 @@ ax.set_title("组合回撤（%）与风险预算干预线"); ax.legend(fontsize=
 ax.grid(alpha=0.3); fig.tight_layout()
 fig.savefig(os.path.join(OUT, "fig2_drawdown.png"), dpi=110); plt.close(fig)
 
-# 图 3：敏感性
-sdf = pd.DataFrame(sens)
+# 图 3：敏感性（全样本，含反事实情形——与正文 4.5 对比表同口径）
+sdf = pd.DataFrame(sens_full)
 fig, ax = plt.subplots(figsize=(9, 4))
 x = np.arange(len(sdf))
-ax.bar(x - 0.2, sdf["夏普比率"], width=0.4, label="夏普比率")
+ax.bar(x - 0.2, sdf["累计收益"] * 100, width=0.4, label="累计收益%")
 ax2 = ax.twinx()
 ax2.bar(x + 0.2, sdf["最大回撤"] * 100, width=0.4, color="tomato", label="最大回撤%")
 ax.set_xticks(x)
 ax.set_xticklabels([f"1/{int(1/r.scale)}凯利\n干预={r.干预}" for r in sdf.itertuples()], fontsize=8)
-ax.set_title("仓位规模敏感性：凯利缩放系数 × 回撤干预（样本外）")
+ax.set_title("仓位规模敏感性：凯利缩放系数 × 回撤干预（全样本，含反事实情形）")
 ax.grid(alpha=0.3); fig.tight_layout()
 fig.savefig(os.path.join(OUT, "fig3_sens.png"), dpi=110); plt.close(fig)
+
+# 图 3b：敏感性（样本外，补充检验——样本内参数冻结后的稳健性）
+sdf_oos = pd.DataFrame(sens)
+fig, ax = plt.subplots(figsize=(9, 4))
+x = np.arange(len(sdf_oos))
+ax.bar(x - 0.2, sdf_oos["累计收益"] * 100, width=0.4, label="累计收益%")
+ax2 = ax.twinx()
+ax2.bar(x + 0.2, sdf_oos["最大回撤"] * 100, width=0.4, color="tomato", label="最大回撤%")
+ax.set_xticks(x)
+ax.set_xticklabels([f"1/{int(1/r.scale)}凯利\n干预={r.干预}" for r in sdf_oos.itertuples()], fontsize=8)
+ax.set_title("仓位规模敏感性：凯利缩放系数 × 回撤干预（样本外，补充检验）")
+ax.grid(alpha=0.3); fig.tight_layout()
+fig.savefig(os.path.join(OUT, "fig3b_sens_oos.png"), dpi=110); plt.close(fig)
 
 with open(os.path.join(OUT, "summary.json"), "w", encoding="utf-8") as f:
     json.dump({"desc": desc, "groups": table, "sens": sens, "sens_full": sens_full,
