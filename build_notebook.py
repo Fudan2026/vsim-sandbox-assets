@@ -435,6 +435,100 @@ MD["s4i"] = """### 4.6 干预线敏感性：预算线设在哪里
 
 MD["s4j"] = """**解读**：预算线 -3% 时回撤被压到 -7.7%、卡玛 1.49，优于 -6% 线的 1.19；放松到 -9% 后卡玛回升到 1.41——**太松的线等于没有线**（触发次数太少，干预机制名存实亡）。干预线不是"越紧越好"：-3% 的代价是换手更高、干预更频繁；正确的问题是"线的位置与仓位规模是否匹配"。此外，本案例的干预是"触线减半"的软干预，从图2可见它并未把回撤真正压进预算以内——**留给学生的改进作业**：设计更强的干预规则（如触线清仓、波动率目标制），重跑全部实验并辩护你的设计。"""
 
+MD["s4k"] = """### 4.7 拓展分析：参数稳健性与置信度治理
+
+前面 4.3–4.6 的全部结论都建立在"单边成本 5bp、置信度原样使用"这两组设定上。一个合格的风险预算官必须追问两个问题：**结论对成本参数稳健吗？置信度本身能被治理吗？**本节做两项拓展分析（均只用既有数据与样本内信息，可一键复现）。
+
+#### 4.7.1 交易成本扫描：策略排序是成本的函数
+
+固定信号与规则，只把单边成本从 0 扫到 10bp，观察三组排序是否翻转。"""
+
+C_47A = textwrap.dedent('''
+    # 4.7.1 交易成本扫描（全样本）：TC_BP 为全局变量，backtest/metrics 调用时读取
+    groups47 = {"A组": wA, "B组": wB, "C组": make_wC(0.25)}
+    scan_rows = []
+    for bp in [0.0, 2.5, 5.0, 10.0]:
+        TC_BP = bp
+        row = {"单边成本bp": bp}
+        for k, fn in groups47.items():
+            port, nav, to_mean = backtest(fn)
+            m = metrics(port, nav, to_mean)
+            row[k + "累计"] = m["累计收益"]
+            row[k + "夏普"] = m["夏普比率"]
+        scan_rows.append(row)
+    TC_BP = 5.0                     # 恢复基准口径
+    print(pd.DataFrame(scan_rows).to_string(index=False))
+''')
+
+MD["s4l"] = """**解读**：
+1. **策略排序不是常数，而是成本的函数**。零成本下 B 组（累计 58.8%，夏普 1.21）反超 A 组（56.3%，1.16）——置信度分档并非毫无信息，高置信桶信号确有微弱毛利；但 5bp 时这份毛利恰被 B 组更高的换手成本（9.2% vs 8.8%）吃平（B≈A，即 4.3 的结论）；**10bp 时 C 组夏普（0.32）反超 A、B（0.19、0.15）——排序反转**。
+2. 成本每翻一倍，A、B 组夏普近乎腰斩，C 组只温和下降——**低换手规则对成本参数的敏感度显著更低**。"仓位规则的选择，本质是换手率预算的选择。"
+3. 教学含义：评估任何"AI 信号 → 仓位"方案，必须报告结论对成本参数的稳健性——这正对应 1.6 节评分判据中"可验证证据"的要求。0bp 与 10bp 是机制实验的极端情形，不是现实报价。
+
+#### 4.7.2 置信度再校准闭环：样本内校准 → 样本外验证
+
+做法：样本内按 0.05 宽度把置信度分十桶，计算每桶真实命中率；把**全部信号**的置信度替换为其所在桶的样本内命中率（"再校准"——模型以后说的不再是 0.9，而是"我这一档历史上对 0.53"）；再回到样本外检验：校准误差降了多少？桶间区分度变了吗？"""
+
+C_47B = textwrap.dedent('''
+    # 4.7.2 置信度再校准闭环（样本内校准 → 样本外验证）
+    def _hit(r):
+        ti, ci = d2i[r.date], c2i[r.code]
+        if ti + 1 >= T:
+            return None
+        nxt = rets.iloc[ti + 1, ci] - ew_idx.iloc[ti + 1]
+        want = 1 if r.signal == "buy" else -1
+        return float(np.sign(nxt) == want) if nxt != 0 else 0.0
+
+    EDGES = np.round(np.arange(0.5, 1.0001, 0.05), 2)
+    def _bucket(c):
+        return min(max(int(np.searchsorted(EDGES, min(max(c, 0.5), 0.9999), side="right") - 1), 0), len(EDGES) - 2)
+
+    date_cut = dates[t_is_end]
+    sg_in = sg[sg["date"] < date_cut].copy()
+    sg_in["b"] = sg_in["conviction"].apply(_bucket)
+    in_hits = {}
+    for b, sub in sg_in.groupby("b"):
+        h = [x for x in (_hit(r) for r in sub.itertuples()) if x is not None]
+        in_hits[b] = (len(h), float(np.mean(h)) if h else np.nan)
+    print("样本内校准（固定宽度十桶）:")
+    print(pd.DataFrame([{"桶": f"[{EDGES[b]:.2f},{EDGES[b+1]:.2f})", "条数": n,
+                         "命中率": round(r, 3)} for b, (n, r) in sorted(in_hits.items())]).to_string(index=False))
+
+    sg_rc = sg.copy()
+    sg_rc["b"] = sg_rc["conviction"].apply(_bucket)
+    sg_rc["conv_rc"] = sg_rc["b"].map(lambda b: in_hits[b][1])
+
+    def _oos(df, col):
+        sub = df[df["date"] >= date_cut].copy()
+        sub["b"] = sub[col].apply(_bucket)
+        rows = []
+        for b, s2 in sub.groupby("b"):
+            h = [x for x in (_hit(r) for r in s2.itertuples()) if x is not None]
+            rows.append({"桶": f"[{EDGES[b]:.2f},{EDGES[b+1]:.2f})", "条数": len(h),
+                         "OOS命中率": round(float(np.mean(h)), 3) if h else np.nan})
+        return pd.DataFrame(rows)
+
+    oos_o, oos_r = _oos(sg, "conviction"), _oos(sg_rc, "conv_rc")
+    def _err(tbl, ref):
+        errs = [abs(r["OOS命中率"] - ref[round(float(r["桶"].split(",")[0][1:]), 2)])
+                for _, r in tbl.iterrows() if not np.isnan(r["OOS命中率"])]
+        return float(np.mean(errs))
+    print("\\n样本外校准：原始置信度");  print(oos_o.to_string(index=False))
+    print("样本外校准：再校准置信度");  print(oos_r.to_string(index=False))
+    err_o = _err(oos_o, {round(EDGES[b], 2): (EDGES[b] + EDGES[b + 1]) / 2 for b in range(len(EDGES) - 1)})
+    err_r = _err(oos_r, {round(EDGES[b], 2): in_hits[b][1] for b in in_hits})
+    print(f"\\n平均校准误差: 原始 {err_o:.3f} → 再校准 {err_r:.3f}")
+    oos_cv = sg[sg["date"] >= date_cut]["conviction"]
+    p10 = float(np.quantile(sg_in["conviction"], 0.10))
+    print(f"分布漂移监控: 样本内均值 {sg_in['conviction'].mean():.3f} vs 样本外 {oos_cv.mean():.3f}; "
+          f"样本外信号低于样本内 P10({p10:.2f}) 的占比 {(oos_cv < p10).mean():.1%}")
+''')
+
+MD["s4n"] = """**解读**：
+1. **校准在工程上完全可行**：再校准把平均校准误差从 0.221 压到 0.089——"模型说 0.9"被改成"这一档历史上对 0.53"，置信度的"说"与"做"重新对齐。任何大模型供应商都应内建这一步（对应 5.2 政策建议）。
+2. **但校准修不了区分度**：再校准是保序替换，只修标签、不改排序；桶间命中率依旧无单调结构，样本外约 85% 的信号落入同一桶——置信度仍不构成仓位依据。**一句话：再校准能修复"说的部分"，修不了"知的部分"——置信度能否驱动仓位，取决于桶间真实区分度，而非校准技巧。**这为 4.3 的"校准失败"诊断提供了工程闭环，也直接回应思考题 8。
+3. **分布漂移是真实存在的**：样本外置信度均值 0.876 → 0.860，12.7% 的样本外信号跌破样本内 P10（0.63）——AI 系统上线后，置信度分布本身会漂移，校准必须定期重做。这是"可解释归因 + 持续监控"的又一实证。"""
+
 MD["s5"] = """## 5 结论与建议
 
 ### 5.1 研究结论
@@ -528,6 +622,7 @@ md(MD["s4c"]); code(C_GROUPS); code(C_FIG1); code(C_FIG2); md(MD["s4d"])
 md(MD["s4e"]); code(C_OOS); md(MD["s4f"])
 md(MD["s4g"]); code(C_SENS); code(C_FIG3); md(MD["s4h"])
 md(MD["s4i"]); code(C_DDSENS); md(MD["s4j"])
+md(MD["s4k"]); code(C_47A); md(MD["s4l"]); code(C_47B); md(MD["s4n"])
 md(MD["s5"]); md(MD["hw"]); md(MD["appendix"]); code(C_APPENDIX)
 
 # 执行全部代码单元
