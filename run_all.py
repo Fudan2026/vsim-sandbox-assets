@@ -68,11 +68,11 @@ for k, v in desc.items():
     print(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}")
 
 # 回测引擎 ---------------------------------------------------
-def backtest(weight_fn, t0=0, t1=None, intervene=True):
+def backtest(weight_fn, t0=0, t1=None, intervene=True, record_exposure=False):
     """weight_fn(t)->目标权重向量(N)；返回逐日组合收益与换手。"""
     t1 = T if t1 is None else t1
     w = np.zeros(N)
-    port, turnover = [], []
+    port, turnover, gross_list = [], [], []
     peak = 1.0
     nav = 1.0
     for t in range(t0, t1):
@@ -90,8 +90,11 @@ def backtest(weight_fn, t0=0, t1=None, intervene=True):
         peak = max(peak, nav)
         port.append(r - cost)
         turnover.append(to)
+        gross_list.append(target.sum())
         w = target
     port = pd.Series(port, index=dates[t0:t1])
+    if record_exposure:
+        return port, nav, float(np.mean(turnover)), float(np.mean(gross_list))
     return port, nav, float(np.mean(turnover))
 
 def metrics(port, nav, to_mean=None):
@@ -276,6 +279,34 @@ ax.set_title("仓位规模敏感性：凯利缩放系数 × 回撤干预（样�
 ax.grid(alpha=0.3); fig.tight_layout()
 fig.savefig(os.path.join(OUT, "fig3b_sens_oos.png"), dpi=110); plt.close(fig)
 
+# ---------------- 平均敞口匹配基准（回应"回撤更低是否只因仓位更轻"） ----------------
+print("\n== 平均敞口匹配基准（全样本）==")
+_, _, _, expoA = backtest(wA, record_exposure=True)
+_, _, _, expoC = backtest(make_wC(0.25), record_exposure=True)
+_, _, _, expoCraw = backtest(make_wC(0.25), intervene=False, record_exposure=True)
+
+def w_stat_scaled(k):
+    def f(t):
+        return wA(t) * k
+    return f
+
+expo_bench = {"平均敞口": {"A满仓等权": round(expoA, 4),
+                          "C1/4凯利+干预": round(expoC, 4),
+                          "C1/4凯利无干预": round(expoCraw, 4)}}
+rows_exp = []
+pS, nS, tS, gS = backtest(w_stat_scaled(expoC), intervene=False, record_exposure=True)
+mS = metrics(pS, nS, tS)
+rows_exp.append({"基准": "S 静态等权（敞口匹配C，无干预）", **mS})
+mC = metrics(*backtest(make_wC(0.25)))
+rows_exp.append({"基准": "C 1/4凯利+回撤干预", **mC})
+mCraw = metrics(*backtest(make_wC(0.25), intervene=False))
+rows_exp.append({"基准": "C' 1/4凯利（无干预）", **mCraw})
+mA = metrics(*backtest(wA))
+rows_exp.append({"基准": "A 满仓等权", **mA})
+expo_bench["对照表"] = rows_exp
+for r_ in rows_exp:
+    print(r_["基准"], {k: r_[k] for k in ("累计收益", "年化波动", "夏普比率", "最大回撤", "卡玛比率", "日均单边换手")})
+
 # ---------------- VX 拓展：因子化诊断（IC / ICIR，pandas 秩相关，不依赖 scipy） ----------------
 print("\n== 因子化诊断：信号方向 vs 次日超额收益的截面 Spearman IC ==")
 rank_rets = rets.rank(axis=1)          # 每日截面秩
@@ -365,6 +396,6 @@ TC_BP = TC_BP_SAVE
 
 with open(os.path.join(OUT, "summary.json"), "w", encoding="utf-8") as f:
     json.dump({"desc": desc, "groups": table, "sens": sens, "sens_full": sens_full,
-               "calibration": cal_rows, "oos": oos, "factor_ic": factor_ic, "signal_decay": decay,
+               "calibration": cal_rows, "oos": oos, "exposure_bench": expo_bench, "factor_ic": factor_ic, "signal_decay": decay,
                "recalibration": recal_vx, "cost_scan": cost_scan_vx}, f, ensure_ascii=False, indent=2, default=float)
 print("\nsaved ->", OUT)
