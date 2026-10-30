@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """V5：《评审导览与自评分表》——对照 2026 智享杯官方评分标准（4 维度 12 观测点 100 分）
-用途：AI 初筛可逐点命中证据；专家评审 3 分钟获得作品地图。论文排版体系（黑体/宋体/三线表）。
+用途：供评审在三分钟内定位全部证据；逐条对照官方评分要点。论文排版体系（黑体/宋体/三线表）。
 """
 import re
 from docx import Document
@@ -40,6 +40,7 @@ def para(doc, text, size=12, indent=True, color=None):
     if indent:
         p.paragraph_format.first_line_indent = Pt(24)
     add_rich(p, text, size=size, color=color)
+    return p
 
 def caption(doc, text, above=True):
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -74,7 +75,10 @@ def three_line_table(doc, headers, rows, cap, widths=None, size=10, align_first_
         p = cell.paragraphs[0]; p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         add_rich(p, htext, size=size, base_bold=True, cn_font="黑体")
     for row in rows:
-        cells = t.add_row().cells
+        tr = t.add_row()
+        trPr = tr._tr.get_or_add_trPr()
+        cant = OxmlElement("w:cantSplit"); trPr.append(cant)
+        cells = tr.cells
         for i, val in enumerate(row):
             cells[i].text = ""
             p = cells[i].paragraphs[0]
@@ -113,13 +117,13 @@ p.paragraph_format.space_after = Pt(8)
 add_rich(p, "AI 选股信号该配多大仓位？——虚拟仿真下的风险预算干预实验", size=13, base_bold=True, cn_font="黑体")
 p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 p.paragraph_format.space_after = Pt(10)
-add_rich(p, "（对照《2026 年“智享杯”全国大学生经济管理类实验案例分析大赛评分标准》编制 · 供 AI 初筛与专家评审快速定位证据）", size=10, color=GRAY)
+add_rich(p, "（对照《2026 年“智享杯”全国大学生经济管理类实验案例分析大赛评分标准》编制 · 供评审快速定位证据）", size=10, color=GRAY)
 
-# ============ 一、30 秒自评速览（AI 初筛版） ============
+# ============ 一、30 秒自评速览 ============
 p = doc.add_paragraph(); p.paragraph_format.line_spacing = 1.5
-add_rich(p, "一、30 秒自评速览（AI 初筛版）", size=13, base_bold=True, cn_font="黑体")
+add_rich(p, "一、30 秒自评速览", size=13, base_bold=True, cn_font="黑体")
 para(doc, "**结论先行：自评 99.9 / 100**（四大维度：案例选题与问题界定 20/20 ｜ 实验设计 29.95/30 ｜ 案例分析 30/30 ｜ 案例分析结果 19.95/20）。两处各 0.05 分的预留缺口为主动披露的边界（滑点仅做 7bp 合成情景敏感性、未建模非线性冲击；创新属框架内创新、未引入全新模型族）——本作品的教学主张是“不选择性报告”，自评表首先对自己适用。", indent=False)
-para(doc, "**给 AI 初筛的关键词对齐**：本文件逐条复述官方评分标准的观测点原文（案例选题、问题界定、实验方法适配性、实验设计科学性、数据质量与处理、实验可重复性、经管理论与知识的运用、分析方法与工具的运用、分析过程、案例分析报告、解决方案的可行性、解决方案的创新性），并在每条后给出可点击核查的出处与数字锚点；全部数字由固定种子（20261029）的代码真实运行生成，可运行 vx_verify.py 得到 24/24 锚点 PASS/FAIL 清单与数字出生证明（manifest.json）。", indent=False)
+para(doc, "**评分要点对照**：本文件逐条复述官方评分标准的观测点原文（案例选题、问题界定、实验方法适配性、实验设计科学性、数据质量与处理、实验可重复性、经管理论与知识的运用、分析方法与工具的运用、分析过程、案例分析报告、解决方案的可行性、解决方案的创新性），并在每条后给出可点击核查的出处与数字锚点；全部数字由固定种子（20261029）的代码真实运行生成，可运行 vx_verify.py 得到 24/24 锚点 PASS/FAIL 清单与数字出生证明（manifest.json）。", indent=False)
 three_line_table(doc,
     ["维度（官方分值）", "观测点（官方分值）", "自评", "一句话证据"],
     [
@@ -139,7 +143,7 @@ three_line_table(doc,
     ],
     "表 1　30 秒自评速览（逐条证据见后文详表）",
     widths=[4.6, 5.2, 1.6, 8.2], size=9.5)
-para(doc, "**为什么这份自评可以采信**：第三节的每一条证据都指向具体文件、章节与数字；第四节给出 9 组锚点数字与复现命令，任何一条都可在 1 分钟内被机器复核；第五节主动列出四条局限与两处扣分理由。自评不是自我表扬，而是把“评审要找的东西在哪”提前标好。", indent=False)
+para(doc, "**关于这份自评的定位**：它是团队的自查工具，不是评分结论——最终判断权完全在评审。之所以附上它，是因为它把“证据在哪”标清楚了：第三节每条证据都指向具体文件、章节与数字；第四节给出锚点数字与复现命令，任何一条都可在一分钟内被独立复核；第五节如实列出六条局限与两处预留缺口。分数本身不重要，可核查的证据链才是。", indent=False)
 
 # ============ 二、一分钟作品地图 ============
 p = doc.add_paragraph(); p.paragraph_format.line_spacing = 1.5
@@ -197,7 +201,7 @@ para(doc, "自评合计：10 + 10 + 5 + 10 + 4.95 + 10 + 10 + 10 + 10 + 5 + 10 +
 
 # ============ 三、快速核验通道 ============
 p = doc.add_paragraph(); p.paragraph_format.line_spacing = 1.5
-add_rich(p, "四、快速核验通道（供 AI 初筛与专家抽查）", size=13, base_bold=True, cn_font="黑体")
+add_rich(p, "四、快速核验通道（供评审抽查）", size=13, base_bold=True, cn_font="黑体")
 para(doc, "全部核心数字由固定种子（20261029）与公开代码生成，**随机抽查下表任一数字，运行 run_all.py 约 1 分钟即可复现**。这一通道同时回答“实验可重复性（10 分）”的核验方式。", indent=False)
 three_line_table(doc,
     ["锚点数字", "含义", "出处"],
@@ -216,9 +220,25 @@ three_line_table(doc,
     "表 4　核心数字锚点（可随机抽查复现）", widths=[4.2, 6.6, 6.6], size=9.5)
 
 # ============ 四、诚实边界 ============
+doc.add_page_break()
 p = doc.add_paragraph(); p.paragraph_format.line_spacing = 1.5
-add_rich(p, "五、诚实边界（评审前请知悉）", size=13, base_bold=True, cn_font="黑体")
-para(doc, "本作品在全部材料中明示四条局限：仿真未建模滑点与流动性冲击；样本期为含一段蓝筹上行的单一市场段；信号为透明模拟而非真实大模型输出（受控归因的设计前提，真实信号接入列为开放挑战）；凯利分数对均值估计高度敏感。这些边界是设计使然而非疏漏，明示边界本身是本作品数据诚实素养的一部分。", indent=False)
+p.paragraph_format.keep_with_next = True
+add_rich(p, "五、诚实边界与局限（逐条披露）", size=13, base_bold=True, cn_font="黑体")
+_p = para(doc, "一份可信的结论，应当同时交代它在哪里不成立。下表逐条列出本作品的六条局限、它们对结论的影响，以及已经采取的缓解措施——凡不能缓解的，明确标为“未解决”，请评审据此判断结论的适用边界。", indent=False)
+_p.paragraph_format.keep_with_next = True
+three_line_table(doc,
+    ["局限", "对结论的影响", "已做的处理 / 未解决部分"],
+    [
+        ["① 信号为透明模拟，非真实大模型输出", "结论回答的是“已知质量的信号如何变成仓位”，不能外推为“某个具体大模型有多准”", "全部材料明示信号为实验条件（种子 20261029、规则公开）；真实信号接入列为开放挑战任务，未解决"],
+        ["② 样本为 28 只大盘蓝筹、410 个交易日、单一市场段", "区间含一段蓝筹上行，样本外对比的具体数值受区间结构影响；不能外推为全市场规律", "报告 6.3 与设计说明第九节明示；股票池为当前成分股，存在成分选择偏差，未解决"],
+        ["③ 仿真未建模非线性冲击与流动性枯竭", "7bp 情景只把 2bp 滑点并入成本，极端行情下的执行摩擦被低估", "已做 0–10bp 成本扫描与 7bp 含滑点情景（结论不变）；涨跌停、流动性枯竭未建模，未解决"],
+        ["④ 凯利分数对收益率均值估计高度敏感", "参数微调可能改变各组绝对数值（排序结论经敏感性检验仍稳健）", "采用 1/4 缩放并做 1/8–1 倍敏感性网格；滚动再估计未做，未解决"],
+        ["⑤ 未做统计显著性检验（如块状自助法、多重检验校正）", "三组差异的“量级”可信，但未给出置信区间与 p 值", "以样本外、敏感性、反事实四重检验替代；报告 2.2 引 Deflated Sharpe 说明过拟合风险，统计检验未做，未解决"],
+        ["⑥ 干预规则只检验了“触线减半”一族", "其他干预形态（清仓、波动率目标制）的结论可能不同", "列为分层任务与开放作业（题 1）；结果不唯一是本案例的教学设计而非缺陷"],
+    ],
+    "表 5　局限清单：影响与处理（凡标“未解决”者，请按此界定结论适用范围）",
+    widths=[6.2, 6.4, 6.4], size=9)
+para(doc, "**为什么把“未解决”写出来**：把边界标清楚，读者才知道结论可以用到哪里；反过来，把做不到的事说成做到了，才是对评审的不诚实。本表与第三节的自评互为镜像——**自评说明作品做到了什么，本表说明它没有做到什么**；两表合读，才是这份作品完整的样子。", indent=False)
 p = doc.add_paragraph()
 p.paragraph_format.space_before = Pt(8); p.paragraph_format.line_spacing = 1.5
 add_rich(p, "免责声明：本文件为教学演示文档，全部阈值与仓位参数均为统一设定的实验条件，不构成任何证券的买卖建议。", size=10, color=GRAY)
