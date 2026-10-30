@@ -201,13 +201,21 @@ C_GROUPS = textwrap.dedent('''
 ''')
 
 C_FIG1 = textwrap.dedent('''
+    # 视觉规范：与教学 PPT 同一色板（A 蓝 / B 橙 / C 绿）
+    COLORS = {"A": "#2563EB", "B": "#F97316", "C": "#10B981"}
+    def _c(name):
+        return COLORS.get(name.strip()[0], "#64748B")
     fig, ax = plt.subplots(figsize=(10, 4.8))
     for name, s in navs.items():
-        ax.plot(s.index, s.values, label=name, lw=1.4)
-    ax.axvline(dates[t_is_end], color="gray", ls="--", lw=0.8)
-    ax.text(dates[t_is_end], ax.get_ylim()[1] * 0.97, " 样本外起点", fontsize=8, color="gray")
-    ax.set_title("图1  固定 AI 信号、不同仓位规则下的组合累计净值（公开行情 + 透明模拟信号）")
-    ax.legend(fontsize=9); ax.grid(alpha=0.3)
+        ax.plot(s.index, s.values, label=name, lw=1.6, color=_c(name))
+    ax.axvline(dates[t_is_end], color="#64748B", ls="--", lw=0.9)
+    ax.text(dates[t_is_end], ax.get_ylim()[1] * 0.97, " 样本外起点", fontsize=8, color="#64748B")
+    ax.set_title("图1  固定 AI 信号、不同仓位规则下的组合累计净值（公开行情 + 透明模拟信号）",
+                 fontsize=11, color="#0F172A")
+    ax.legend(fontsize=9, frameon=False)
+    ax.grid(alpha=0.6, color="#E2E8F0")
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
     plt.show()
 ''')
 
@@ -215,10 +223,13 @@ C_FIG2 = textwrap.dedent('''
     fig, ax = plt.subplots(figsize=(10, 3.8))
     for name, s in navs.items():
         dd = s / s.cummax() - 1
-        ax.plot(dd.index, dd.values * 100, label=name, lw=1.2)
-    ax.axhline(-MAX_DD * 100, color="red", ls=":", lw=0.9, label="回撤预算线 -6%")
-    ax.set_title("图2  组合回撤（%）与风险预算干预线")
-    ax.legend(fontsize=9, ncol=4); ax.grid(alpha=0.3)
+        ax.plot(dd.index, dd.values * 100, label=name, lw=1.4, color=_c(name))
+    ax.axhline(-MAX_DD * 100, color="#F43F5E", ls=":", lw=1.1, label="回撤预算线 -6%")
+    ax.set_title("图2  组合回撤（%）与风险预算干预线", fontsize=11, color="#0F172A")
+    ax.legend(fontsize=9, ncol=4, frameon=False, loc="lower left")
+    ax.grid(alpha=0.6, color="#E2E8F0")
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
     plt.show()
 ''')
 
@@ -251,15 +262,24 @@ C_FIG3 = textwrap.dedent('''
     s = sens_table.copy()
     fig, ax = plt.subplots(figsize=(10, 4.2))
     x = np.arange(len(s))
-    sharpe = s["夏普比率"].astype(float)
+    cum = s["累计收益"].str.rstrip("%").astype(float)
     mdd = s["最大回撤"].str.rstrip("%").astype(float)
-    ax.bar(x - 0.2, sharpe, width=0.4, label="夏普比率")
+    has = [i for i, r in enumerate(s.itertuples()) if str(r.回撤干预) == "有"]
+    nof = [i for i, r in enumerate(s.itertuples()) if str(r.回撤干预) != "有"]
+    ax.bar([i - 0.2 for i in has], [cum[i] for i in has], width=0.4, color="#2563EB", label="累计收益（有干预）")
+    ax.bar([i - 0.2 for i in nof], [cum[i] for i in nof], width=0.4, color="#94A3B8", label="累计收益（无干预=反事实）")
     ax2 = ax.twinx()
-    ax2.bar(x + 0.2, mdd, width=0.4, color="tomato", label="最大回撤%")
+    ax2.plot(x + 0.2, mdd, color="#F43F5E", marker="D", ms=5, lw=1.2, label="最大回撤%")
+    ax2.axhline(-6, color="#F43F5E", ls=":", lw=0.9)
+    ax2.text(len(s) - 0.45, -6.4, "预算线 -6%", fontsize=8, color="#F43F5E")
     ax.set_xticks(x)
     ax.set_xticklabels([f"{r.凯利缩放}凯利\\n干预={r.回撤干预}" for r in s.itertuples()], fontsize=8)
-    ax.set_title("图3  仓位规模敏感性：凯利缩放系数 × 回撤干预（全样本，含反事实情形）")
-    ax.grid(alpha=0.3)
+    ax.set_title("图3  仓位规模敏感性：凯利缩放系数 × 回撤干预（全样本，含反事实情形）",
+                 fontsize=11, color="#0F172A")
+    ax.legend(fontsize=8, frameon=False, loc="upper left")
+    ax2.legend(fontsize=8, frameon=False, loc="upper right")
+    ax.grid(alpha=0.6, color="#E2E8F0", axis="y")
+    ax.spines["top"].set_visible(False); ax2.spines["top"].set_visible(False)
     plt.show()
 ''')
 
@@ -457,7 +477,8 @@ C_47A = textwrap.dedent('''
             row[k + "夏普"] = m["夏普比率"]
         scan_rows.append(row)
     TC_BP = 5.0                     # 恢复基准口径
-    print(pd.DataFrame(scan_rows).to_string(index=False))
+    scan = pd.DataFrame(scan_rows)
+    print(scan.to_string(index=False))
 ''')
 
 MD["s4l"] = """**解读**：
@@ -527,7 +548,77 @@ C_47B = textwrap.dedent('''
 MD["s4n"] = """**解读**：
 1. **校准在工程上完全可行**：再校准把平均校准误差从 0.221 压到 0.089——"模型说 0.9"被改成"这一档历史上对 0.53"，置信度的"说"与"做"重新对齐。任何大模型供应商都应内建这一步（对应 5.2 政策建议）。
 2. **但校准修不了区分度**：再校准是保序替换，只修标签、不改排序；桶间命中率依旧无单调结构，样本外约 85% 的信号落入同一桶——置信度仍不构成仓位依据。**一句话：再校准能修复"说的部分"，修不了"知的部分"——置信度能否驱动仓位，取决于桶间真实区分度，而非校准技巧。**这为 4.3 的"校准失败"诊断提供了工程闭环，也直接回应思考题 8。
-3. **分布漂移是真实存在的**：样本外置信度均值 0.876 → 0.860，12.7% 的样本外信号跌破样本内 P10（0.63）——AI 系统上线后，置信度分布本身会漂移，校准必须定期重做。这是"可解释归因 + 持续监控"的又一实证。"""
+3. **分布漂移是真实存在的**：样本外置信度均值 0.876 → 0.860，12.7% 的样本外信号跌破样本内 P10（0.63）——AI 系统上线后，置信度分布本身会漂移，校准必须定期重做。这是"可解释归因 + 持续监控"的又一实证。
+
+图 4 与图 5 分别给出两项拓展分析的可视化：成本扫描的"排序反转"与再校准前后的校准曲线。"""
+
+C_FIG47A = textwrap.dedent('''
+    # 图 4：成本扫描可视化——夏普比率随单边成本的变化（排序反转）
+    fig, ax = plt.subplots(figsize=(10, 4.2))
+    xs = scan["单边成本bp"].astype(float)
+    for k, cc, nm in [("A组", "#2563EB", "A 满仓等权"), ("B组", "#F97316", "B 置信度分档"), ("C组", "#10B981", "C 1/4凯利+干预")]:
+        ys = scan[k + "夏普"].astype(float)
+        ax.plot(xs, ys, marker="o", ms=6, lw=1.8, color=cc, label=nm)
+    ax.annotate("排序反转：C 组夏普反超", xy=(10, float(scan[scan["单边成本bp"] == 10.0]["C组夏普"].iloc[0])),
+                xytext=(6.1, 0.52), fontsize=9, color="#0F172A",
+                arrowprops=dict(arrowstyle="->", color="#64748B", lw=1.0))
+    ax.axvline(5, color="#94A3B8", ls=":", lw=0.9)
+    ax.text(5.08, ax.get_ylim()[0] + 0.05, "基准 5bp", fontsize=8, color="#64748B")
+    ax.set_xlabel("单边交易成本（bp）"); ax.set_ylabel("夏普比率")
+    ax.set_title("图4  交易成本扫描：策略排序是成本的函数（全样本）", fontsize=11, color="#0F172A")
+    ax.legend(fontsize=9, frameon=False)
+    ax.grid(alpha=0.6, color="#E2E8F0")
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
+    plt.show()
+''')
+
+C_FIG47B = textwrap.dedent('''
+    # 图 5：再校准前后的样本外校准曲线（对角线 = 完美校准）
+    fig, ax = plt.subplots(figsize=(7.2, 5.2))
+    ox = [float(r["桶"].split(",")[0][1:]) + 0.025 for _, r in oos_o.iterrows()]
+    oy = oos_o["OOS命中率"].astype(float)
+    rx, ry = [], []
+    for _, r in oos_r.iterrows():
+        b = int(round((float(r["桶"].split(",")[0][1:]) - 0.5) / 0.05))
+        if not np.isnan(r["OOS命中率"]):
+            rx.append(in_hits[b][1]); ry.append(float(r["OOS命中率"]))
+    ax.plot([0.4, 1.0], [0.4, 1.0], ls="--", color="#94A3B8", lw=1.0, label="完美校准 y = x")
+    ax.scatter(ox, oy, color="#F43F5E", s=46, zorder=3, label="原始置信度（十桶）")
+    ax.scatter(rx, ry, color="#10B981", s=70, marker="s", zorder=3, label="再校准置信度")
+    ax.annotate("0.975 的自信，0.534 的现实", xy=(0.975, 0.534), xytext=(0.66, 0.60),
+                fontsize=9, color="#0F172A",
+                arrowprops=dict(arrowstyle="->", color="#64748B", lw=1.0))
+    ax.set_xlabel("所报置信度"); ax.set_ylabel("样本外真实命中率")
+    ax.set_title("图5  置信度再校准前后的样本外校准曲线", fontsize=11, color="#0F172A")
+    ax.legend(fontsize=9, frameon=False, loc="upper left")
+    ax.grid(alpha=0.6, color="#E2E8F0")
+    for sp in ["top", "right"]:
+        ax.spines[sp].set_visible(False)
+    plt.show()
+''')
+
+MD["s4o"] = """### 4.8 信号衰减分析：执行时点的量化依据
+
+仓位规则的全部结论都建立在"t 日收盘后生成信号、t+1 执行"之上。一个自然的问题是：**信号的有效期到底多长？**把"次日超额收益取对"的命中判定分别放到 t+1、t+2、t+3、t+5 上重算（同一样本、同一判定口径），观察命中率随时间轴的衰减。"""
+
+C_48 = textwrap.dedent('''
+    # 4.8 信号衰减：命中率随执行延迟的衰减（全样本）
+    decay_rows = []
+    for h in [1, 2, 3, 5]:
+        hits = []
+        for r in sg.itertuples():
+            ti, ci = d2i[r.date], c2i[r.code]
+            if ti + h >= T:
+                continue
+            nxt = rets.iloc[ti + h, ci] - ew_idx.iloc[ti + h]
+            want = 1 if r.signal == "buy" else -1
+            hits.append(float(np.sign(nxt) == want) if nxt != 0 else 0.0)
+        decay_rows.append({"执行延迟": f"t+{h}", "样本数": len(hits), "方向命中率": round(float(np.mean(hits)), 4)})
+    print(pd.DataFrame(decay_rows).to_string(index=False))
+''')
+
+MD["s4p"] = """**解读**：命中率从 t+1 的 53.95% 单调衰减——t+2 跌至 50.6%，**t+3 起跌破 50%（49.8%）**，t+5 已无信息含量。三点含义：① **信号有效期以日计**，"AI 说买"之后每拖延一天，信息的价值就折损一截——这为仓位规则中 t+1 执行的设定提供了量化依据，也说明"信号→仓位"必须是日频闭环；② 仓位规则不需要预测信号何时失效，只需要在有效期内完成转化——**转化链路的摩擦（成本、干预、约束）因此比信号本身更值得优化**；③ 对 AI 系统建设方的提示：投研信号的交付时点与执行时点之间的每一分钟延迟，都是未被计量的 alpha 损耗。"""
 
 MD["s5"] = """## 5 结论与建议
 
@@ -622,7 +713,8 @@ md(MD["s4c"]); code(C_GROUPS); code(C_FIG1); code(C_FIG2); md(MD["s4d"])
 md(MD["s4e"]); code(C_OOS); md(MD["s4f"])
 md(MD["s4g"]); code(C_SENS); code(C_FIG3); md(MD["s4h"])
 md(MD["s4i"]); code(C_DDSENS); md(MD["s4j"])
-md(MD["s4k"]); code(C_47A); md(MD["s4l"]); code(C_47B); md(MD["s4n"])
+md(MD["s4k"]); code(C_47A); code(C_FIG47A); md(MD["s4l"]); code(C_47B); code(C_FIG47B); md(MD["s4n"])
+md(MD["s4o"]); code(C_48); md(MD["s4p"])
 md(MD["s5"]); md(MD["hw"]); md(MD["appendix"]); code(C_APPENDIX)
 
 # 执行全部代码单元
