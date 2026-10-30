@@ -382,7 +382,7 @@ print(recal_vx)
 print("\n== 交易成本扫描（全样本，三组 × 0/2.5/5/10bp） ==")
 cost_scan_vx = []
 TC_BP_SAVE = TC_BP
-for bp in [0.0, 2.5, 5.0, 10.0]:
+for bp in [0.0, 2.5, 5.0, 7.0, 10.0]:   # 7.0 = 5bp 佣金 + 2bp 滑点冲击
     TC_BP = bp
     row = {"单边成本bp": bp}
     for name, (fn, _) in groups.items():
