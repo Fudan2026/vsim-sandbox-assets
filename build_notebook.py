@@ -620,6 +620,50 @@ C_48 = textwrap.dedent('''
 
 MD["s4p"] = """**解读**：命中率从 t+1 的 53.95% 单调衰减——t+2 跌至 50.6%，**t+3 起跌破 50%（49.8%）**，t+5 已无信息含量。三点含义：① **信号有效期以日计**，"AI 说买"之后每拖延一天，信息的价值就折损一截——这为仓位规则中 t+1 执行的设定提供了量化依据，也说明"信号→仓位"必须是日频闭环；② 仓位规则不需要预测信号何时失效，只需要在有效期内完成转化——**转化链路的摩擦（成本、干预、约束）因此比信号本身更值得优化**；③ 对 AI 系统建设方的提示：投研信号的交付时点与执行时点之间的每一分钟延迟，都是未被计量的 alpha 损耗。"""
 
+MD["s4q"] = """### 4.9 因子化诊断：用行业语言重述信号质量
+
+命中率与校准分桶是"教学语言"；量化行业评估一个信号，用的是 **IC（信息系数）**——信号方向与次日超额收益的每日截面秩相关。把本案例的"信号 × 置信度"当作一个因子，计算全样本 IC 序列及其统计量，再按置信度桶考察分组超额收益——**把选股逻辑摆上台面，用行业语言重新审视本案例的信号**。"""
+
+C_49 = textwrap.dedent("""
+    # 4.9 因子化诊断：IC / ICIR / 分桶超额（全样本；pandas 秩相关，不依赖 scipy）
+    rank_rets = rets.rank(axis=1)
+    ic_list = []
+    for ti in range(T - 1):
+        codes = np.where(sig_mat[ti] != 0)[0]
+        if len(codes) < 5:
+            continue
+        d = pd.Series(sig_mat[ti, codes]).rank()
+        nx = rank_rets.iloc[ti + 1, codes].rank()
+        ic_list.append(float(np.corrcoef(d, nx)[0, 1]))
+    ic_s = pd.Series(ic_list)
+    print(f"IC 均值 {ic_s.mean():.4f} | ICIR {ic_s.mean() / ic_s.std():.3f} | "
+          f"t 值 {ic_s.mean() / ic_s.std() * np.sqrt(len(ic_s)):.2f} | IC>0 占比 {(ic_s > 0).mean():.1%}")
+
+    EDGES49 = np.round(np.arange(0.5, 1.0001, 0.05), 2)
+    def _b49(c):
+        return min(max(int(np.searchsorted(EDGES49, min(max(c, 0.5), 0.9999), side="right") - 1), 0), len(EDGES49) - 2)
+    sg49 = sg.copy(); sg49["b"] = sg49["conviction"].apply(_b49)
+    rows49 = []
+    for b, sub in sg49.groupby("b"):
+        xs, hs = [], []
+        for r in sub.itertuples():
+            ti, ci = d2i[r.date], c2i[r.code]
+            if ti + 1 >= T:
+                continue
+            x = rets.iloc[ti + 1, ci] - ew_idx.iloc[ti + 1]
+            xs.append(x)
+            hs.append(1.0 if ((np.sign(x) == 1 and r.signal == "buy") or (np.sign(x) == -1 and r.signal == "sell")) else 0.0)
+        rows49.append({"置信度桶": f"[{EDGES49[b]:.2f},{EDGES49[b+1]:.2f})", "信号数": len(xs),
+                       "次日超额bp": round(float(np.mean(xs)) * 1e4, 2),
+                       "年化约": f"{np.mean(xs) * 252:.1%}", "方向命中率": f"{np.mean(hs):.1%}"})
+    print(pd.DataFrame(rows49).to_string(index=False))
+""")
+
+MD["s4r"] = """**解读**：
+1. **IC 均值 0.062、ICIR 0.249、t 值 5.04、IC 为正占比 60.1%**——信号具有微弱但统计显著的预测力。这是"方向命中率 53.95%"的行业语言转述：53.95% 的命中率折算成 IC 约在 0.05–0.08 区间，属"弱因子"的典型量级。教学点：**评估任何 AI 信号，先问 IC 与 ICIR，再谈仓位规则**——命中率不联网、不行业标准，IC 才是量化团队通用的对话语言。
+2. **分桶超额收益与命中率给出不一致的画像**：最高置信桶 [0.95,1.0) 日均超额 +6.05bp，但同桶命中率仅 53.5%、**中位数深达 -66.7bp**——均值为正完全由 2024 年 10 月等少数暴涨日的极端收益主导；而最低置信桶 [0.50,0.55) 命中率却最高（63.1%）。两个度量交叉验证了"置信度不携带稳定区分度"，同时示范了一堂方法论课：**分组检验必须同时报告均值型与中位数型度量，只报其一可能得出相反结论**。
+3. 联动思考题 4 与 8：若把再校准（4.7.2）与因子化诊断（本节）组合，就是一套完整的"AI 信号治理工作流"——先问 IC，再验校准，最后才轮到仓位规则。"""
+
 MD["s5"] = """## 5 结论与建议
 
 ### 5.1 研究结论
@@ -715,6 +759,7 @@ md(MD["s4g"]); code(C_SENS); code(C_FIG3); md(MD["s4h"])
 md(MD["s4i"]); code(C_DDSENS); md(MD["s4j"])
 md(MD["s4k"]); code(C_47A); code(C_FIG47A); md(MD["s4l"]); code(C_47B); code(C_FIG47B); md(MD["s4n"])
 md(MD["s4o"]); code(C_48); md(MD["s4p"])
+md(MD["s4q"]); code(C_49); md(MD["s4r"])
 md(MD["s5"]); md(MD["hw"]); md(MD["appendix"]); code(C_APPENDIX)
 
 # 执行全部代码单元

@@ -169,9 +169,11 @@ for name, (fn, _) in groups.items():
 
 # 样本外检验（后 30%，权重函数仍用样本内参数）
 print("\n== 样本外(后30%) ==")
+oos = []
 for name, (fn, _) in groups.items():
     port, nav, to_mean = backtest(fn, t0=t_is_end)
     m = metrics(port, nav, to_mean)
+    oos.append({"组": name, **m})
     print(name, {k: round(v, 4) for k, v in m.items()})
 
 # 敏感性分析：凯利缩放系数 × 是否干预
@@ -274,7 +276,95 @@ ax.set_title("仓位规模敏感性：凯利缩放系数 × 回撤干预（样�
 ax.grid(alpha=0.3); fig.tight_layout()
 fig.savefig(os.path.join(OUT, "fig3b_sens_oos.png"), dpi=110); plt.close(fig)
 
+# ---------------- VX 拓展：因子化诊断（IC / ICIR，pandas 秩相关，不依赖 scipy） ----------------
+print("\n== 因子化诊断：信号方向 vs 次日超额收益的截面 Spearman IC ==")
+rank_rets = rets.rank(axis=1)          # 每日截面秩
+ic_series = []
+for ti in range(T - 1):
+    codes = np.where(sig_mat[ti] != 0)[0]
+    if len(codes) < 5:
+        continue
+    d = pd.Series(sig_mat[ti, codes]).rank()
+    nx = rank_rets.iloc[ti + 1, codes].rank()
+    ic_series.append(float(np.corrcoef(d, nx)[0, 1]))
+ic_s = pd.Series(ic_series)
+ic_mean, ic_std = float(ic_s.mean()), float(ic_s.std())
+factor_ic = {"IC均值": round(ic_mean, 4), "ICIR": round(ic_mean / ic_std, 3),
+             "t值": round(ic_mean / ic_std * np.sqrt(len(ic_s)), 2),
+             "IC为正占比": round(float((ic_s > 0).mean()), 3), "有效日数": int(len(ic_s))}
+print(factor_ic)
+
+# ---------------- VX 拓展：信号衰减（命中率随执行延迟） ----------------
+print("\n== 信号衰减：命中率随执行延迟（t+h） ==")
+decay = []
+for h in [1, 2, 3, 5]:
+    hits = []
+    for r in sg.itertuples():
+        ti, ci = d2i[r.date], c2i[r.code]
+        if ti + h >= T:
+            continue
+        nxt = rets.iloc[ti + h, ci] - ew_idx.iloc[ti + h]
+        want = 1 if r.signal == "buy" else -1
+        hits.append(float(np.sign(nxt) == want) if nxt != 0 else 0.0)
+    decay.append({"执行延迟": f"t+{h}", "样本数": len(hits), "方向命中率": round(float(np.mean(hits)), 4)})
+    print(decay[-1])
+
+# ---------------- VX 拓展：置信度再校准闭环（样本内校准 → 样本外验证） ----------------
+print("\n== 置信度再校准闭环（样本内固定宽度十桶 → 样本外验证） ==")
+EDGES_VX = np.round(np.arange(0.5, 1.0001, 0.05), 2)
+def _bkt_vx(c):
+    return min(max(int(np.searchsorted(EDGES_VX, min(max(c, 0.5), 0.9999), side="right") - 1), 0), len(EDGES_VX) - 2)
+def _hit_vx(r):
+    ti, ci = d2i[r.date], c2i[r.code]
+    if ti + 1 >= T:
+        return None
+    nxt = rets.iloc[ti + 1, ci] - ew_idx.iloc[ti + 1]
+    want = 1 if r.signal == "buy" else -1
+    return float(np.sign(nxt) == want) if nxt != 0 else 0.0
+
+sg_in_vx = sg[sg["date"] < dates[t_is_end]].copy()
+sg_in_vx["b"] = sg_in_vx["conviction"].apply(_bkt_vx)
+in_hits_vx = {}
+for b, sub in sg_in_vx.groupby("b"):
+    h = [x for x in (_hit_vx(r) for r in sub.itertuples()) if x is not None]
+    in_hits_vx[b] = (len(h), float(np.mean(h)) if h else np.nan)
+sg_rc_vx = sg.copy()
+sg_rc_vx["b"] = sg_rc_vx["conviction"].apply(_bkt_vx)
+sg_rc_vx["conv_rc"] = sg_rc_vx["b"].map(lambda b: in_hits_vx[b][1])
+
+def _oos_err_vx(df, col, ref):
+    sub = df[df["date"] >= dates[t_is_end]].copy()
+    sub["b"] = sub[col].apply(_bkt_vx)
+    errs = []
+    for b, s2 in sub.groupby("b"):
+        h = [x for x in (_hit_vx(r) for r in s2.itertuples()) if x is not None]
+        if h and ref.get(b) is not None:
+            errs.append(abs(float(np.mean(h)) - ref[b]))
+    return float(np.mean(errs)) if errs else np.nan
+
+err_before = _oos_err_vx(sg, "conviction", {b: (EDGES_VX[b] + EDGES_VX[b + 1]) / 2 for b in range(len(EDGES_VX) - 1)})
+err_after = _oos_err_vx(sg_rc_vx, "conv_rc", {b: in_hits_vx[b][1] for b in in_hits_vx})
+recal_vx = {"校准误差_原始": round(err_before, 3), "校准误差_再校准": round(err_after, 3)}
+print(recal_vx)
+
+# ---------------- VX 拓展：交易成本扫描（三组 × 0/2.5/5/10bp，全样本） ----------------
+print("\n== 交易成本扫描（全样本，三组 × 0/2.5/5/10bp） ==")
+cost_scan_vx = []
+TC_BP_SAVE = TC_BP
+for bp in [0.0, 2.5, 5.0, 10.0]:
+    TC_BP = bp
+    row = {"单边成本bp": bp}
+    for name, (fn, _) in groups.items():
+        port, nav, to_mean = backtest(fn)
+        m = metrics(port, nav, to_mean)
+        row[name.split()[0] + "_累计"] = m["累计收益"]
+        row[name.split()[0] + "_夏普"] = m["夏普比率"]
+    cost_scan_vx.append(row)
+    print(row)
+TC_BP = TC_BP_SAVE
+
 with open(os.path.join(OUT, "summary.json"), "w", encoding="utf-8") as f:
     json.dump({"desc": desc, "groups": table, "sens": sens, "sens_full": sens_full,
-               "calibration": cal_rows}, f, ensure_ascii=False, indent=2, default=float)
+               "calibration": cal_rows, "oos": oos, "factor_ic": factor_ic, "signal_decay": decay,
+               "recalibration": recal_vx, "cost_scan": cost_scan_vx}, f, ensure_ascii=False, indent=2, default=float)
 print("\nsaved ->", OUT)
