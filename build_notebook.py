@@ -1061,3 +1061,28 @@ with open(OUT_IPYNB, "w", encoding="utf-8") as f:
     json.dump(nb, f, ensure_ascii=False, indent=1)
 print("cells:", len(cells), "| code:", sum(1 for c in cells if c["cell_type"] == "code"))
 print("size:", os.path.getsize(OUT_IPYNB), "->", OUT_IPYNB)
+## 推荐工具说明
+
+本案例全部计算在平台在线 Notebook（Python 3 / ipykernel）内完成，无需本地安装。涉及的第三方包及版本如下：
+
+| 工具 | 用途 | 版本要求 |
+| --- | --- | --- |
+| Python | 运行环境 | ≥ 3.8（平台内置） |
+| pandas | 数据读取、面板构建、回测引擎 | ≥ 1.3 |
+| numpy | 数值计算（收益、秩相关、自助法） | ≥ 1.21 |
+| matplotlib | 全部图形绘制（净值、回撤、敏感性） | ≥ 3.5 |
+
+如需本地复现，建议使用 Anaconda 或 Miniconda 管理环境：
+
+```bash
+# 创建虚拟环境
+conda create -n zhixiang python=3.10 pandas numpy matplotlib -y
+conda activate zhixiang
+# 运行实验
+python run_all.py
+# 一键自检
+python vx_verify.py
+```
+
+平台右侧"代码帮助"面板提供常用代码片段；"AI 助手"面板可进行代码诊断。遇到报错时，先检查数据文件路径与工作目录是否一致，再核对随机种子是否为 20261029。
+
