@@ -307,6 +307,161 @@ expo_bench["对照表"] = rows_exp
 for r_ in rows_exp:
     print(r_["基准"], {k: r_[k] for k in ("累计收益", "年化波动", "夏普比率", "最大回撤", "卡玛比率", "日均单边换手")})
 
+# ---------------- 稳健性与外推性五项检验 ----------------
+print("\n== 稳健性检验：块状自助法 / 子区间 / 凸性冲击 / 滚动重估 / 替代干预 / 真实信号 ==")
+
+def _bt2(fn, intervene=True, convex_k=0.0, clear_on_trigger=False):
+    w = np.zeros(N); port, tos, nav, peak = [], [], 1.0, 1.0
+    for t in range(T):
+        target = np.clip(np.nan_to_num(fn(t)), 0.0, CAP)
+        ssum = target.sum()
+        if ssum > 1.0:
+            target = target / ssum
+        if peak > 0 and (nav / peak - 1.0) <= -MAX_DD:
+            if clear_on_trigger:
+                target = target * 0.0
+            elif intervene:
+                target = target * 0.5
+        to = np.abs(target - w).sum()
+        cost_ = to * TC_BP / 1e4 + convex_k * to * to
+        r = float((w * rets.iloc[t].values).sum()) if t > 0 else 0.0
+        nav *= (1.0 + r - cost_); peak = max(peak, nav)
+        port.append(r - cost_); tos.append(to); w = target
+    return pd.Series(port, index=dates), nav, float(np.mean(tos))
+
+def _met2(p, nav):
+    n = len(p); ann = nav ** (252 / n) - 1; vol = p.std() * np.sqrt(252)
+    cum = (1 + p).cumprod(); mdd = float((cum / cum.cummax() - 1).min())
+    return dict(cum=float(nav - 1), ann=float(ann), vol=float(vol),
+                sharpe=float((ann - RF) / vol) if vol > 0 else np.nan,
+                mdd=mdd, calmar=float(ann / abs(mdd)) if mdd < 0 else np.nan)
+
+_rng = np.random.default_rng(20261029)
+_B, _L = 1000, 20
+boot = {}
+for _k, _fn in [("A", wA), ("B", wB), ("C", make_wC(0.25))]:
+    _p, _nav, _ = _bt2(_fn)
+    _arr = _p.values; _n = len(_arr); _nb = int(np.ceil(_n / _L))
+    _cs, _ms, _cals = [], [], []
+    for _ in range(_B):
+        _st = _rng.integers(0, _n - _L, _nb)
+        _idx = np.concatenate([np.arange(x, x + _L) for x in _st])[:_n]
+        _s = pd.Series(_arr[_idx]); _cum = (1 + _s).cumprod(); _nv = _cum.iloc[-1]
+        _md = float((_cum / _cum.cummax() - 1).min()); _an = _nv ** (252 / _n) - 1
+        _cs.append(_nv - 1); _ms.append(_md); _cals.append(_an / abs(_md) if _md < 0 else np.nan)
+    boot[_k] = {"累计点估计": round(float(_nav - 1), 4),
+                "累计CI_lo": round(float(np.percentile(_cs, 2.5)), 4),
+                "累计CI_hi": round(float(np.percentile(_cs, 97.5)), 4),
+                "回撤CI_lo": round(float(np.percentile(_ms, 2.5)), 4),
+                "回撤CI_hi": round(float(np.percentile(_ms, 97.5)), 4),
+                "卡玛CI_lo": round(float(np.nanpercentile(_cals, 2.5)), 3),
+                "卡玛CI_hi": round(float(np.nanpercentile(_cals, 97.5)), 3)}
+    print(f"bootstrap {_k}: 累计[{boot[_k]['累计CI_lo']:.1%},{boot[_k]['累计CI_hi']:.1%}] "
+          f"回撤[{boot[_k]['回撤CI_lo']:.1%},{boot[_k]['回撤CI_hi']:.1%}]")
+
+subperiod = []
+_bounds = [(0, T // 3), (T // 3, 2 * T // 3), (2 * T // 3, T)]
+for _i, (_a, _b) in enumerate(_bounds, 1):
+    _row = {"区间": f"{dates[_a].date()} 至 {dates[_b-1].date()}"}
+    for _k, _fn in [("A", wA), ("B", wB), ("C", make_wC(0.25))]:
+        _w = np.zeros(N); _port, _nav, _peak = [], 1.0, 1.0
+        for t in range(_a, _b):
+            _tg = np.clip(np.nan_to_num(_fn(t)), 0.0, CAP); _s = _tg.sum()
+            if _s > 1.0: _tg = _tg / _s
+            if _peak > 0 and (_nav / _peak - 1.0) <= -MAX_DD: _tg = _tg * 0.5
+            _to = np.abs(_tg - _w).sum(); _c = _to * TC_BP / 1e4
+            _r = float((_w * rets.iloc[t].values).sum()) if t > _a else 0.0
+            _nav *= (1 + _r - _c); _peak = max(_peak, _nav); _port.append(_r - _c); _w = _tg
+        _m = _met2(pd.Series(_port), _nav)
+        _row[_k] = f"{_m['cum']:.1%} / {_m['calmar']:.2f}"
+    subperiod.append(_row); print("子区间", _row)
+
+convex = {}
+for _k, _fn in [("A", wA), ("B", wB), ("C", make_wC(0.25))]:
+    _p, _nav, _to = _bt2(_fn, convex_k=5e-4)
+    _m = _met2(_p, _nav); convex[_k] = _m
+    print(f"凸性冲击 {_k}: 累计{_m['cum']:.1%} 夏普{_m['sharpe']:.2f} 回撤{_m['mdd']:.1%} 卡玛{_m['calmar']:.2f}")
+
+def _make_wC_roll(scale=0.25, warmup=60, refit=60):
+    _cache = {}
+    def _f(t):
+        if t < warmup:
+            return np.zeros(N)
+        _key = t // refit
+        if _key not in _cache:
+            _cache[_key] = fit_kelly(t)
+        _w = np.zeros(N)
+        for j, v in _cache[_key].items():
+            if active[t, j]:
+                _w[j] = scale * v
+        return _w
+    return _f
+
+_p_roll, _nav_roll, _to_roll = _bt2(_make_wC_roll())
+roll = _met2(_p_roll, _nav_roll)
+print(f"滚动重估 C-roll: 累计{roll['cum']:.1%} 夏普{roll['sharpe']:.2f} 回撤{roll['mdd']:.1%} 卡玛{roll['calmar']:.2f}")
+
+_p_clr, _nav_clr, _ = _bt2(make_wC(0.25), clear_on_trigger=True)
+clear_var = _met2(_p_clr, _nav_clr)
+print(f"触线清仓变体: 累计{clear_var['cum']:.1%} 夏普{clear_var['sharpe']:.2f} 回撤{clear_var['mdd']:.1%} 卡玛{clear_var['calmar']:.2f}")
+
+# 真实价格信号：20 日动量
+_mom = pivot / pivot.shift(20) - 1.0
+_active_r = np.zeros((T, N), bool); _dir_r = np.zeros((T, N)); _conv_r = np.full((T, N), np.nan)
+for t in range(20, T):
+    _row_v = _mom.iloc[t].values; _valid = ~np.isnan(_row_v)
+    if _valid.sum() < 5:
+        continue
+    _thr = np.nanmedian(np.abs(_row_v[_valid])); _sel = _valid & (np.abs(_row_v) >= _thr)
+    _active_r[t, _sel] = True; _dir_r[t, _sel] = np.sign(_row_v[_sel])
+    _rk = pd.Series(np.abs(_row_v)).rank(pct=True).values
+    _conv_r[t, _sel] = 0.5 + 0.49 * _rk[_sel]
+
+_hits_r = []
+for t in range(20, T - 1):
+    for j in np.where(_active_r[t])[0]:
+        _nx = rets.iloc[t + 1, j] - rets.mean(axis=1).iloc[t + 1]
+        _hits_r.append(float(np.sign(_nx) == _dir_r[t, j]) if _nx != 0 else 0.0)
+real_hit = float(np.mean(_hits_r)) if _hits_r else float("nan")
+
+def _wA_r(t):
+    a = _active_r[t]
+    return np.where(a, 1.0 / max(a.sum(), 1), 0.0)
+def _wB_r(t):
+    cv = _conv_r[t]
+    return np.where(_active_r[t], np.where(cv >= 0.70, 0.30, np.where(cv >= 0.55, 0.20, 0.0)), 0.0)
+def _fit_kelly_r(t_end):
+    out = {}
+    for j in range(N):
+        idx = np.where(_active_r[20:t_end, j])[0] + 20
+        idx = idx[idx + 1 < t_end]
+        if len(idx) < 10:
+            continue
+        nx = rets.iloc[idx + 1, j].values; d = _dir_r[idx, j]
+        p = float((np.sign(nx) == d).mean())
+        win = nx[d == 1]; los = nx[d == -1]
+        aw = win[win > 0].mean() if (win > 0).any() else 0.004
+        al = abs(los[los < 0].mean()) if (los < 0).any() else 0.004
+        b = aw / al if al > 0 else 1.0
+        out[j] = max((p * b - (1 - p)) / b, 0.0)
+    return out
+_kel_r = _fit_kelly_r(t_is_end)
+def _wC_r(t):
+    w = np.zeros(N)
+    for j, f in _kel_r.items():
+        if _active_r[t, j]:
+            w[j] = 0.25 * f
+    return w
+
+real_sig = {"命中率": round(real_hit, 4), "信号数": int(_active_r.sum())}
+for _k, _fn in [("A", _wA_r), ("B", _wB_r), ("C", _wC_r)]:
+    _p, _nav, _to = _bt2(_fn)
+    _m = _met2(_p, _nav); real_sig[_k] = _m
+    print(f"真实动量信号 {_k}: 累计{_m['cum']:.1%} 夏普{_m['sharpe']:.2f} 回撤{_m['mdd']:.1%} 卡玛{_m['calmar']:.2f}")
+
+robustness = {"bootstrap": boot, "subperiod": subperiod, "convex": convex,
+              "rolling": roll, "clear_variant": clear_var, "real_signal": real_sig}
+
 # ---------------- VX 拓展：因子化诊断（IC / ICIR，pandas 秩相关，不依赖 scipy） ----------------
 print("\n== 因子化诊断：信号方向 vs 次日超额收益的截面 Spearman IC ==")
 rank_rets = rets.rank(axis=1)          # 每日截面秩
@@ -396,6 +551,6 @@ TC_BP = TC_BP_SAVE
 
 with open(os.path.join(OUT, "summary.json"), "w", encoding="utf-8") as f:
     json.dump({"desc": desc, "groups": table, "sens": sens, "sens_full": sens_full,
-               "calibration": cal_rows, "oos": oos, "exposure_bench": expo_bench, "factor_ic": factor_ic, "signal_decay": decay,
+               "calibration": cal_rows, "oos": oos, "exposure_bench": expo_bench, "robustness": robustness, "factor_ic": factor_ic, "signal_decay": decay,
                "recalibration": recal_vx, "cost_scan": cost_scan_vx}, f, ensure_ascii=False, indent=2, default=float)
 print("\nsaved ->", OUT)

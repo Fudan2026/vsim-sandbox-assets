@@ -408,6 +408,23 @@ MD["s2"] = """## 2 数据获取与预处理
 
 预处理目标有三：一是把长表数据展开为"日期 × 标的"矩阵，便于矩阵化回测；二是把信号生效时间对齐到"收盘后、次日收益前"，杜绝前视偏差；三是剔除末日无效信号。"""
 
+MD["s2d"] = """### 2.3 数据字典与质量检查
+
+**prices.csv**：date（交易日）、code（标的代码）、close（前复权收盘价）。
+**signals.csv**：date、code、signal（buy/sell）、dir（+1/−1）、conviction（0.5–1.0）。
+
+**质量检查**（下方单元执行）：① 无缺失值；② 方向合法；③ 单日信号不超标的总数；④ 日期范围一致。"""
+
+C_QUAL = textwrap.dedent('''
+    assert pivot.isna().sum().sum() == 0, "缺失值"
+    assert set(np.unique(sig_mat)) <= {-1.0, 0.0, 1.0}, "方向非法"
+    _pd = (sig_mat != 0).sum(axis=1)
+    assert _pd.max() <= N, "单日超标"
+    assert set(sg["date"].unique()).issubset(set(dates)), "日期超范围"
+    print("数据质量四项检查：全部通过")
+    print(f"  面板 {T}x{N} 无缺失；信号 {len(sg)} 条；日均 {_pd.mean():.1f}，覆盖 {(sig_mat != 0).mean():.1%}")
+''')
+
 MD["s3"] = """## 3 描述性统计分析
 
 **3.1 面板与信号概况**：先看数据的全貌——多少天、多少标的、信号多密、看多还是看空为主。
@@ -727,6 +744,155 @@ MD["s4r"] = """**解读**：
 2. **分桶超额收益与命中率给出不一致的画像**：最高置信桶 [0.95,1.0) 日均超额 +6.05bp，但同桶命中率仅 53.5%、**中位数深达 -66.7bp**——均值为正完全由 2024 年 10 月等少数暴涨日的极端收益主导；而最低置信桶 [0.50,0.55) 命中率却最高（63.1%）。两个度量交叉验证了"置信度不携带稳定区分度"，同时示范了一堂方法论课：**分组检验必须同时报告均值型与中位数型度量，只报其一可能得出相反结论**。
 3. 联动思考题 4 与 8：若把再校准（4.7.2）与因子化诊断（本节）组合，就是一套完整的"AI 信号治理工作流"——先问 IC，再验校准，最后才轮到仓位规则。"""
 
+MD["s4w"] = """### 4.12 交互式参数实验室
+
+修改三个参数（LAB_BP / LAB_SCALE / LAB_DD）后重跑，观察变化。探索：① 15bp 下 C 还正收益吗？② 1/2 缩放破 -15% 吗？③ -4% 触线换手增多少？"""
+
+C_LAB = textwrap.dedent('''
+    LAB_BP = 5.0; LAB_SCALE = 0.25; LAB_DD = 0.06
+    _save = (TC_BP, MAX_DD); TC_BP, MAX_DD = LAB_BP, LAB_DD
+    _rows = []
+    for tag, fn, itv in [("A", wA, True), ("B", wB, True), ("C", make_wC(LAB_SCALE), True)]:
+        p, nav, to = backtest(fn); m = metrics(p, nav, to); _rows.append({"组合": tag, **m})
+    TC_BP, MAX_DD = _save
+    print(f"参数：成本={LAB_BP}bp 缩放={LAB_SCALE} 触线=-{LAB_DD:.0%}")
+    print(pd.DataFrame(_rows).to_string(index=False))
+''')
+
+MD["s4u"] = """### 4.11 稳健性与外推性：五项检验
+
+单一路径、单一信号、单一干预形态是最常见的三个脆弱点。五项检验回答"结论是不是运气"：① 块状自助法（1000 次重抽样）；② 子区间三等分；③ 凸性冲击（成本含换手平方项）；④ 滚动重估凯利（walk-forward）；⑤ 替代干预（清仓）与真实信号替换（20 日动量）。"""
+
+C_411 = textwrap.dedent('''
+def _bt2(fn, convex_k=0.0, clear=False):
+    w = np.zeros(N); port, nav, peak, tos = [], 1.0, 1.0, []
+    for t in range(T):
+        tg = np.clip(np.nan_to_num(fn(t)), 0.0, CAP); ss = tg.sum()
+        if ss > 1.0: tg = tg / ss
+        if peak > 0 and (nav / peak - 1.0) <= -MAX_DD:
+            tg = tg * (0.0 if clear else 0.5)
+        to = np.abs(tg - w).sum()
+        c = to * TC_BP / 1e4 + convex_k * to * to
+        r = float((w * rets.iloc[t].values).sum()) if t > 0 else 0.0
+        nav *= (1 + r - c); peak = max(peak, nav)
+        port.append(r - c); tos.append(to); w = tg
+    return pd.Series(port, index=dates), nav
+
+def _m2(p, nav):
+    ann = nav ** (252 / len(p)) - 1; vol = p.std() * np.sqrt(252)
+    cum = (1 + p).cumprod(); mdd = float((cum / cum.cummax() - 1).min())
+    return ann, vol, (ann - RF) / vol, mdd, (ann / abs(mdd) if mdd < 0 else np.nan)
+
+rng = np.random.default_rng(20261029); B, L = 1000, 20
+boot_rows = []
+for k, fn in [("A", wA), ("B", wB), ("C", make_wC(0.25))]:
+    p, nav = _bt2(fn); arr = p.values; n = len(arr); nb = int(np.ceil(n / L))
+    cs, ms = [], []
+    for _ in range(B):
+        st = rng.integers(0, n - L, nb)
+        idx = np.concatenate([np.arange(x, x + L) for x in st])[:n]
+        s_ = pd.Series(arr[idx]); cum = (1 + s_).cumprod()
+        cs.append(cum.iloc[-1] - 1); ms.append(float((cum / cum.cummax() - 1).min()))
+    boot_rows.append({"组": k, "累计": f"{nav-1:.1%}",
+                      "累计95%CI": f"[{np.percentile(cs,2.5):.1%},{np.percentile(cs,97.5):.1%}]",
+                      "回撤95%CI": f"[{np.percentile(ms,2.5):.1%},{np.percentile(ms,97.5):.1%}]"})
+print("① 块状自助法 95% CI"); print(pd.DataFrame(boot_rows).to_string(index=False))
+
+sub_rows = []
+for a, b in [(0, T//3), (T//3, 2*T//3), (2*T//3, T)]:
+    row = {"区间": f"{dates[a].date()}→{dates[b-1].date()}"}
+    for k, fn in [("A", wA), ("B", wB), ("C", make_wC(0.25))]:
+        w = np.zeros(N); port, nav, peak = [], 1.0, 1.0
+        for t in range(a, b):
+            tg = np.clip(np.nan_to_num(fn(t)), 0.0, CAP); ss = tg.sum()
+            if ss > 1.0: tg = tg / ss
+            if peak > 0 and (nav / peak - 1.0) <= -MAX_DD: tg = tg * 0.5
+            to = np.abs(tg - w).sum(); c = to * TC_BP / 1e4
+            r = float((w * rets.iloc[t].values).sum()) if t > a else 0.0
+            nav *= (1 + r - c); peak = max(peak, nav); port.append(r - c); w = tg
+        ann, vol, sh, mdd, cal = _m2(pd.Series(port), nav)
+        row[k] = f"{nav-1:.1%} / {cal:.2f}"
+    sub_rows.append(row)
+print(); print("② 子区间"); print(pd.DataFrame(sub_rows).to_string(index=False))
+
+cx_rows = []
+for k, fn in [("A", wA), ("B", wB), ("C", make_wC(0.25))]:
+    p, nav = _bt2(fn, convex_k=5e-4); ann, vol, sh, mdd, cal = _m2(p, nav)
+    cx_rows.append({"方案": k, "累计": f"{nav-1:.1%}", "夏普": f"{sh:.2f}", "回撤": f"{mdd:.1%}", "卡玛": f"{cal:.2f}"})
+print(); print("③ 凸性冲击"); print(pd.DataFrame(cx_rows).to_string(index=False))
+
+cache = {}
+def wC_roll(t):
+    if t < 60: return np.zeros(N)
+    key = t // 60
+    if key not in cache: cache[key] = fit_kelly(t)
+    w = np.zeros(N)
+    for j, v in cache[key].items():
+        if active[t, j]: w[j] = 0.25 * v
+    return w
+p_r, nav_r = _bt2(wC_roll); a_r, v_r, s_r, m_r, c_r = _m2(p_r, nav_r)
+p_c, nav_c = _bt2(make_wC(0.25), clear=True); a_c, v_c, s_c, m_c, c_c = _m2(p_c, nav_c)
+print(f"④ 滚动重估: 累计{nav_r-1:.1%} 夏普{s_r:.2f} 回撤{m_r:.1%} 卡玛{c_r:.2f}")
+print(f"⑤ 清仓变体: 累计{nav_c-1:.1%} 夏普{s_c:.2f} 回撤{m_c:.1%} 卡玛{c_c:.2f}")
+
+mom = pivot / pivot.shift(20) - 1.0
+act_r = np.zeros((T, N), bool); dir_r = np.zeros((T, N)); conv_r = np.full((T, N), np.nan)
+for t in range(20, T):
+    rv = mom.iloc[t].values; valid = ~np.isnan(rv)
+    if valid.sum() < 5: continue
+    thr = np.nanmedian(np.abs(rv[valid])); sel = valid & (np.abs(rv) >= thr)
+    act_r[t, sel] = True; dir_r[t, sel] = np.sign(rv[sel])
+    rk = pd.Series(np.abs(rv)).rank(pct=True).values
+    conv_r[t, sel] = 0.5 + 0.49 * rk[sel]
+hits_r = []
+for t in range(20, T - 1):
+    for j in np.where(act_r[t])[0]:
+        nx = rets.iloc[t + 1, j] - rets.mean(axis=1).iloc[t + 1]
+        hits_r.append(float(np.sign(nx) == dir_r[t, j]) if nx != 0 else 0.0)
+print(f"⑥ 真实动量信号: {int(act_r.sum())} 条 命中率 {np.mean(hits_r):.2%}")
+def wA_r(t):
+    a = act_r[t]; return np.where(a, 1.0 / max(a.sum(), 1), 0.0)
+def wB_r(t):
+    cv = conv_r[t]; return np.where(act_r[t], np.where(cv >= 0.70, 0.30, np.where(cv >= 0.55, 0.20, 0.0)), 0.0)
+def fk_r(t_end):
+    out = {}
+    for j in range(N):
+        idx = np.where(act_r[20:t_end, j])[0] + 20
+        idx = idx[idx + 1 < t_end]
+        if len(idx) < 10: continue
+        nx = rets.iloc[idx + 1, j].values; d = dir_r[idx, j]
+        p = float((np.sign(nx) == d).mean())
+        win, los = nx[d == 1], nx[d == -1]
+        aw = win[win > 0].mean() if (win > 0).any() else 0.004
+        al = abs(los[los < 0].mean()) if (los < 0).any() else 0.004
+        b = aw / al if al > 0 else 1.0
+        out[j] = max((p * b - (1 - p)) / b, 0.0)
+    return out
+kel_r = fk_r(t_is_end)
+def wC_r(t):
+    w = np.zeros(N)
+    for j, f in kel_r.items():
+        if act_r[t, j]: w[j] = 0.25 * f
+    return w
+for k, fn in [("A", wA_r), ("B", wB_r), ("C", wC_r)]:
+    p, nav = _bt2(fn); ann, vol, sh, mdd, cal = _m2(p, nav)
+    print(f"  真实信号 {k}: 累计{nav-1:.1%} 夏普{sh:.2f} 回撤{mdd:.1%} 卡玛{cal:.2f}")
+''')
+
+MD["s4v"] = """**五项检验结论**：
+
+**① 自助法——必须先看**：累计收益 95%CI 很宽（A 约 -7.6%~80.3%），三组差异统计不显著——把排序当机制证据，不把差值当收益预测。但 C 组回撤 CI（-15.2%~-4.3%）明显优于 A、B（约 -20.3%~-6.1%），回撤优势稳健。
+
+**② 子区间**：三段排序均 A≈B>C，C 组震荡段卡玛最高（4.83 vs 3.12）——不是偶发。
+
+**③ 凸性冲击——本节最强发现**：A/B 卡玛降至 0.47/0.42，C 组仍有 0.88、回撤 -10.1%——真实成本结构非线性，低换手规则的价值被线性假设低估。
+
+**④ 滚动重估**：14.6%/0.92 低于静态 18.6%/1.19——保守的静态 1/4 缩放反而更稳，与"凯利对均值估计敏感"一致。
+
+**⑤ 清仓与真实信号**：清仓 14.8%/0.95 不如减半 18.6%/1.19（错过反弹）；真实动量信号（命中率仅 48.7%）下 C 组回撤 -8.8% vs A 组 -13.5%、卡玛 1.78 vs 1.71——**框架不依赖模拟信号的特殊性**。
+
+**一句话**：赢与不赢都写出来，才是检验的意义。"""
+
 MD["s5"] = """## 5 结论与建议
 
 ### 5.1 研究结论
@@ -812,6 +978,46 @@ def run_cell(idx):
     cell["execution_count"] = idx + 1
 
 
+MD["guide"] = """## 0 使用指南
+
+### 0.1 三种使用模式
+
+| 模式 | 适合人群 | 做法 |
+| --- | --- | --- |
+| 顺序精读 | 首次学习 | 逐单元运行并阅读，重点理解 1.3 与 4.1 |
+| 直接运行 | 复习/复核 | "运行→全部运行"约 2 分钟，回读重点小节 |
+| 只看结论 | 快速浏览 | 读 5 结论 + 附录 |
+
+### 0.2 学习目标（完成本案例后应能做到）
+
+- 说出仓位规则在"信号→仓位→后果"链条中的位置（K1）
+- 解释 5bp 成本为何形成约 8.8% 年化拖累（K2）
+- 依据校准表指出置信度过度自信（K3）
+- 说明 1/4 凯利与触线干预的双重属性（K4）
+- 独立设计仓位规则并完成对照回测（A2）
+- 用敞口匹配基准检验自己的结论（4.10）
+
+### 0.3 术语表
+
+| 术语 | 含义 | 出处 |
+| --- | --- | --- |
+| 前复权 | 分红送股调整到当前口径 | 2.1 |
+| 超额收益 | 个股−等权指数 | 3 |
+| 凯利分数 | f*=(p·b−q)/b | 4.1 |
+| 1/4 缩放 | 凯利×0.25 保守化 | 4.1 |
+| 最大回撤 | 峰值到谷底最大跌幅 | 4.1 |
+| 卡玛比率 | 年化/回撤 | 4.3 |
+| 样本外 | 后 30% 检验段 | 1.4 |
+| 反事实 | 移除机制重跑 | 4.5 |
+| 置信度校准 | 置信度 vs 真实频率 | 4.1 |
+| IC | 信号 vs 收益秩相关 | 4.9 |
+| ICIR | IC 均值/标准差 | 4.9 |
+| 块状自助法 | 时间块重抽样 CI | 4.11 |
+| 凸性冲击 | 成本含换手平方项 | 4.11 |
+| walk-forward | 仅用历史重估 | 4.11 |
+
+"""
+
 MD["attach"] = """## 案例附件说明
 
 **分析工具**：平台在线 Notebook（Python 3 / ipykernel）；pandas、numpy、matplotlib；全部代码无平台私有依赖，可本地复现。
@@ -819,8 +1025,9 @@ MD["attach"] = """## 案例附件说明
 **复核通道**：run_all.py 一键复现全部表格与图形；vx_verify.py 输出 24 锚点 PASS/FAIL 与 manifest.json（数据血统与代码版本哈希）——报告中任何一个数字都能回答"从哪份数据来、由哪段代码什么参数生成、如何复核"。"""
 
 md(MD["title"])
+md(MD["guide"])
 md(MD["s1"])
-md(MD["s2"]); code(C_IMPORT); code(C_LOAD)
+md(MD["s2"]); code(C_IMPORT); code(C_LOAD); md(MD["s2d"]); code(C_QUAL)
 md(MD["s3"]); code(C_DESC); code(C_CALIB); md(MD["s3b"])
 md(MD["s4"]); code(C_ENGINE)
 md(MD["s4c"]); code(C_GROUPS); code(C_FIG1); code(C_FIG2); md(MD["s4d"])
@@ -831,6 +1038,8 @@ md(MD["s4k"]); code(C_47A); code(C_FIG47A); md(MD["s4l"]); code(C_47B); code(C_F
 md(MD["s4o"]); code(C_48); md(MD["s4p"])
 md(MD["s4q"]); code(C_49); md(MD["s4r"])
 md(MD["s4s"]); code(C_410); md(MD["s4t"])
+md(MD["s4w"]); code(C_LAB)
+md(MD["s4u"]); code(C_411); md(MD["s4v"]); code(C_LAB)
 md(MD["s5"]); md(MD["hw"]); md(MD["appendix"]); code(C_APPENDIX)
 md(MD["attach"])
 
