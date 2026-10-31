@@ -1038,8 +1038,8 @@ md(MD["s4k"]); code(C_47A); code(C_FIG47A); md(MD["s4l"]); code(C_47B); code(C_F
 md(MD["s4o"]); code(C_48); md(MD["s4p"])
 md(MD["s4q"]); code(C_49); md(MD["s4r"])
 md(MD["s4s"]); code(C_410); md(MD["s4t"])
+md(MD["s4u"]); code(C_411); md(MD["s4v"])
 md(MD["s4w"]); code(C_LAB)
-md(MD["s4u"]); code(C_411); md(MD["s4v"]); code(C_LAB)
 md(MD["s5"]); md(MD["hw"]); md(MD["appendix"]); code(C_APPENDIX)
 md(MD["attach"])
 
